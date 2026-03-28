@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "upwork-extractor"
+version = "0.1.0"
+description = "Extract structured data from saved Upwork job posting HTML files"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+upwork-extract = "upwork_extractor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["upwork_extractor*"]
