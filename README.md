@@ -17,7 +17,7 @@ the tool will tell you what went wrong and how to fix it.
 ## Installation
 
 ```bash
-uv tool install /absolute/path/to/upwork_extractor
+uv tool install /absolute/path/to/this-project-directory
 ```
 
 If `upwork-extract` is not found after installation:
