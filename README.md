@@ -48,6 +48,5 @@ upwork-extract posting.html --format yaml
 ## Running tests
 
 ```bash
-uv sync
 uv run pytest tests/
 ```
