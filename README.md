@@ -6,9 +6,9 @@ Converts saved Upwork job posting HTML files into Markdown.
 
 Useful for Obsidian notes, or using the CAPTCHA-protected job posting content for a CV optimization pipeline.
 
-Meant to work with the HTML content of Upwork job postings opened in their own window (i.e. the URL having the form `https://www.upwork.com/jobs/<slug>`).
+Meant to work with the HTML content of job postings opened in their own window (i.e. the URL having the form `https://www.upwork.com/jobs/<slug>`)
 
-Saving the HTML as "Web page, complete" preserves absolute HTTP URLs of attachment links, which will be added to the Markdown in an Attachments section.
+Saving the HTML as "Web page, complete" preserves the full HTTP URLs of attachment links, which will be added to the Markdown in an Attachments section.
 
 ## Installation
 
