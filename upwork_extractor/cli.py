@@ -1,15 +1,3 @@
-"""
-upwork_extractor.cli
-~~~~~~~~~~~~~~~~~~~~
-Command-line interface for the Upwork job posting extractor.
-
-Usage:
-    upwork-extract posting.html
-    upwork-extract posting.html --format json
-    upwork-extract posting.html --format markdown
-    upwork-extract posting.html --format yaml
-"""
-
 import argparse
 import sys
 from pathlib import Path
@@ -17,24 +5,15 @@ from pathlib import Path
 from .extractor import UpworkExtractor
 
 
-FORMATS = ("yaml", "json", "markdown", "md")
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="upwork-extract",
-        description="Extract structured data from a saved Upwork job posting HTML file.",
+        description="Extract a saved Upwork job posting as Markdown.",
     )
     parser.add_argument(
         "file",
         type=Path,
         help="Path to the saved HTML file",
-    )
-    parser.add_argument(
-        "--format", "-f",
-        choices=FORMATS,
-        default="markdown",
-        help="Output format (default: markdown)",
     )
     return parser.parse_args(argv)
 
@@ -53,18 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    fmt = args.format
-    if fmt == "yaml":
-        output = job.to_yaml()
-    elif fmt == "json":
-        output = job.to_json()
-    elif fmt in ("markdown", "md"):
-        output = job.to_markdown()
-    else:
-        output = job.to_markdown()
-
-    sys.stdout.write(output)
-
+    sys.stdout.write(job.to_markdown())
     return 0
 
 

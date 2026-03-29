@@ -1,6 +1,6 @@
-# upwork-extractor 🦷
+# upwork-extractor
 
-Extracts structured job data from saved Upwork job posting HTML files, generating Markdown, YAML, or JSON.
+Converts saved Upwork job posting HTML files into Markdown.
 
 ## Use Case
 
@@ -10,30 +10,17 @@ Meant to work with the HTML content of job postings opened in their own window, 
 
 ```bash
 cd upwork-extractor
-uv tool install . # or
-uv tool install --editable . # reflect code changes
+make install
 ```
-
-If `upwork-extract` is not found after installation:
-
-```bash
-uv tool update-shell
-```
-
-## Local fixture for tests
-
-To run the tests, save the HTML of a real Upwork job posting to `tests/fixtures/sample.html`
 
 ## Usage
 
 ```bash
 upwork-extract posting.html > job-posting.md
-upwork-extract posting.html --format json > job-posting.json
-upwork-extract posting.html --format yaml > job-posting.yaml
 ```
 
 ## Running tests
 
 ```bash
-uv run pytest tests/
+make test
 ```

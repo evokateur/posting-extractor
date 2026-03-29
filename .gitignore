@@ -3,4 +3,3 @@ build/
 *.egg-info/
 __pycache__/
 .pytest_cache/
-tests/fixtures/sample.html
