@@ -1,4 +1,4 @@
-# upwork-extractor
+# upwork-extractor 🦷
 
 Converts saved Upwork job posting HTML files into Markdown.
 
