@@ -4,7 +4,7 @@ install:
 	uv tool install --editable .
 
 uninstall:
-	uv tool uninstall upwork-extractor
+	uv tool uninstall posting-extract
 
 test:
 	uv run pytest

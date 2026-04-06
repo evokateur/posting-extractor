@@ -1,26 +1,25 @@
-# upwork-extractor 🦷
+# posting-extract
 
-Converts saved Upwork job posting HTML files into Markdown.
+Converts job posting HTML files into Markdown.
 
 ## Use Case
 
-Useful for Obsidian notes, or using the CAPTCHA-protected job posting content for a CV optimization pipeline.
+Useful for Obsidian notes, or using job posting content for a CV optimization pipeline.
 
-Meant to work with the HTML content of job postings opened in their own window (i.e. the URL having the form `https://www.upwork.com/jobs/<slug>`)
-
-Saving the HTML as "Web page, complete" preserves the full HTTP URLs of attachment links, which will be added to the Markdown in an Attachments section.
+Works with saved HTML files and direct `http` or `https` job posting URLs.
 
 ## Installation
 
 ```bash
-cd upwork-extractor
+cd posting-extract
 make install
 ```
 
 ## Usage
 
 ```bash
-upwork-extract posting.html # generates posting.md
+posting-extract posting.html
+posting-extract posting.html custom.md
 ```
 
 ## Running tests
