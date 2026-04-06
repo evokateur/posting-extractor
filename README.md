@@ -4,7 +4,7 @@ Converts job posting HTML into Markdown.
 
 ## Use Case
 
-Useful for Obsidian notes, or using job posting content for a CV optimization pipeline.
+Useful for Obsidian notes, or job posting content for a CV optimization pipeline.
 
 Works with saved HTML files and direct `http` or `https` job posting URLs.
 
