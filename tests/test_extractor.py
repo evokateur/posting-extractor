@@ -93,8 +93,69 @@ def make_generic_job_page() -> str:
 """
 
 
-def read_example(path: str) -> str:
-    return Path(path).read_text(encoding="utf-8")
+def make_welcome_to_the_jungle_job_page() -> str:
+    job_posting = {
+        "@context": "https://schema.org/",
+        "@type": "JobPosting",
+        "title": "Software Engineer",
+        "hiringOrganization": {
+            "@type": "Organization",
+            "name": "Example Co",
+        },
+        "description": (
+            "<h1>Requirements</h1>"
+            "<ul>"
+            "<li>Strong Python experience</li>,"
+            "<li>Clear written communication</li>"
+            "</ul>"
+        ),
+        "responsibilities": (
+            "<ul>"
+            "<li>Build internal tools</li>,"
+            "<li>Work across distributed teams</li>"
+            "</ul>"
+        ),
+        "skills": (
+            "<ul>"
+            "<li>Python</li>,"
+            "<li>APIs</li>"
+            "</ul>"
+        ),
+        "jobBenefits": (
+            "<ul>"
+            "<li>Remote work</li>,"
+            "<li>Home office stipend</li>"
+            "</ul>"
+        ),
+    }
+    raw_json = json.dumps(job_posting)
+    return f"""\
+<html>
+  <head>
+    <title>Example Co Software Engineer | Welcome to the Jungle</title>
+    <meta property="og:site_name" content="Welcome to the Jungle" />
+    <script type="application/ld+json">{raw_json}</script>
+  </head>
+  <body>
+    <main><h1>Software Engineer</h1></main>
+    <div data-testid="salary-section"><span>$120k</span><span> + Equity</span></div>
+    <div data-testid="experience-section">Junior and Mid level</div>
+    <div data-testid="job-locations">
+      <div>Remote from US</div>
+      <div>Remote from Canada</div>
+    </div>
+    <div data-testid="job-technology-used">
+      <div disabled="">Python</div>
+      <div disabled="">GraphQL</div>
+      <div disabled="">AWS</div>
+    </div>
+    <div data-testid="company-sector-tags">
+      <span>SaaS</span>
+      <span>Developer Tools</span>
+    </div>
+  </body>
+</html>
+"""
 
 
 def test_extracts_title_and_markdown_body():
@@ -179,40 +240,13 @@ def test_select_extractor_returns_generic_for_generic_page():
     assert extractor is GenericHtmlExtractor
 
 
-def test_select_extractor_returns_welcome_to_the_jungle_for_saved_page():
-    extractor = select_extractor(read_example("docs/examples/welcome-to-the-jungle.html"))
+def test_select_extractor_returns_wttj_for_wttj_payload():
+    extractor = select_extractor(
+        make_welcome_to_the_jungle_job_page(),
+        source_url="https://app.welcometothejungle.com/jobs/example",
+    )
 
     assert extractor is WelcomeToTheJungleExtractor
-
-
-def test_welcome_to_the_jungle_matches_both_saved_page_variants():
-    standard_html = read_example("docs/examples/welcome-to-the-jungle.html")
-    dashboard_html = read_example("docs/examples/welcome-to-the-jungle-from-dashboard.html")
-
-    assert WelcomeToTheJungleExtractor.matches(standard_html) is True
-    assert WelcomeToTheJungleExtractor.matches(dashboard_html) is True
-
-
-def test_welcome_to_the_jungle_extractor_extracts_standard_saved_page():
-    html = read_example("docs/examples/welcome-to-the-jungle.html")
-
-    job = WelcomeToTheJungleExtractor.from_string(html).extract()
-
-    assert job.title == "Experienced Software Engineer, Automattic"
-    assert "Company benefits" in job.to_markdown()
-    assert "Meet the team" in job.to_markdown()
-    assert "Navigate between jobs by swiping left or right" not in job.to_markdown()
-
-
-def test_welcome_to_the_jungle_extractor_extracts_dashboard_saved_page():
-    html = read_example("docs/examples/welcome-to-the-jungle-from-dashboard.html")
-
-    job = WelcomeToTheJungleExtractor.from_string(html).extract()
-
-    assert job.title == "Experienced Software Engineer, Automattic"
-    assert "Welcome back, Wesley" not in job.to_markdown()
-    assert "Company benefits" in job.to_markdown()
-    assert "Apply now" not in job.to_markdown()
 
 
 def test_upwork_matches_checks_content_signature():
@@ -223,6 +257,53 @@ def test_upwork_matches_checks_content_signature():
 def test_generic_matches_checks_content_signature():
     assert GenericHtmlExtractor.matches(make_generic_job_page()) is True
     assert GenericHtmlExtractor.matches("<html><body><p>Too short</p></body></html>") is False
+
+
+def test_wttj_matches_checks_content_signature():
+    assert WelcomeToTheJungleExtractor.matches(
+        make_welcome_to_the_jungle_job_page(),
+        source_url="https://app.welcometothejungle.com/jobs/example",
+    ) is True
+    assert WelcomeToTheJungleExtractor.matches(make_generic_job_page()) is False
+
+
+def test_wttj_extractor_extracts_company_and_structured_sections():
+    job = WelcomeToTheJungleExtractor.from_string(
+        make_welcome_to_the_jungle_job_page(),
+        source_url="https://app.welcometothejungle.com/jobs/example",
+    ).extract()
+
+    assert job.title == "Software Engineer"
+    assert job.company == "Example Co"
+    assert job.salary == "$120k + Equity"
+    assert job.experience == "Junior, Mid"
+    assert job.locations == ["Remote from US", "Remote from Canada"]
+    assert job.technologies == ["Python", "GraphQL", "AWS"]
+    assert job.company_sector_tags == ["SaaS", "Developer Tools"]
+    assert job.data_testid_values is not None
+    assert job.data_testid_values["salary-section"] == ["$120k + Equity"]
+    assert "job-technology-used" in job.data_testid_values
+    assert "company-sector-tags" in job.data_testid_values
+    assert "Build internal tools" in job.to_markdown()
+    assert "Home office stipend" in job.to_markdown()
+    assert "- **Company:** Example Co" in job.to_markdown()
+    assert "- **Salary:** $120k + Equity" in job.to_markdown()
+    assert "- **Experience:** Junior, Mid" in job.to_markdown()
+    assert "- **Locations:** Remote from US, Remote from Canada" in job.to_markdown()
+    assert "- **Technologies:** Python, GraphQL, AWS" in job.to_markdown()
+    assert "- **Sectors:** SaaS, Developer Tools" in job.to_markdown()
+
+
+def test_extract_job_posting_prefers_wttj_extractor_when_available():
+    job = extract_job_posting(
+        make_welcome_to_the_jungle_job_page(),
+        source_url="https://app.welcometothejungle.com/jobs/example",
+    )
+
+    assert job.company == "Example Co"
+    assert job.salary == "$120k + Equity"
+    assert "# Skills" in job.to_markdown()
+    assert job.technologies == ["Python", "GraphQL", "AWS"]
 
 
 def test_generic_html_extractor_uses_title_when_h1_is_missing():

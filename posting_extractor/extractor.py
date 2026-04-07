@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from markdownify import markdownify
 
@@ -18,10 +19,18 @@ _DEVALUE_SPECIAL_TAGS = frozenset({
 _WRONG_FILE_ERROR = """\
 Could not find the expected Upwork job data in this HTML file.
 """
-_WELCOME_TO_THE_JUNGLE_ERROR = "Could not find the expected Welcome to the Jungle job content in this HTML file."
 _GENERIC_EXTRACTION_ERROR = "Could not find recognizable job posting content in this HTML file."
 _NOT_HTML_ERROR = "Input file does not contain HTML."
 _UPWORK_BASE_URL = "https://www.upwork.com"
+_WELCOME_TO_THE_JUNGLE_HOSTS = frozenset({
+    "app.welcometothejungle.com",
+    "welcometothejungle.com",
+})
+_WELCOME_TO_THE_JUNGLE_EXPERIENCE_LEVELS = (
+    ("Junior", re.compile(r"\bJunior\b", re.IGNORECASE)),
+    ("Mid", re.compile(r"\bMid\b", re.IGNORECASE)),
+    ("Senior", re.compile(r"\bSenior\b", re.IGNORECASE)),
+)
 _CONTENT_KEYWORDS = (
     "job description",
     "about the role",
@@ -47,15 +56,138 @@ _JUNK_CLASS_PATTERNS = (
     "modal",
 )
 _ATTACHMENT_PATTERNS = (".pdf", ".doc", ".docx", ".rtf", "attachment", "download")
-_WTTJ_CONTENT_MARKERS = (
-    'window.__APOLLO_STATE__=__b64dec("',
-    'data-testid="company-benefit-bullet"',
-    'Welcome to the Jungle',
-)
 
 
 class ExtractorMismatchError(ValueError):
     pass
+
+
+class _DataTestIdParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._stack: list[dict[str, Any]] = []
+        self.results: dict[str, list[str]] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+        self._stack.append(
+            {
+                "tag": tag,
+                "testid": attrs_dict.get("data-testid"),
+                "parts": [],
+            }
+        )
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._stack:
+            return
+
+        frame = self._stack.pop()
+        if frame["tag"] != tag:
+            return
+
+        testid = frame["testid"]
+        if not testid:
+            return
+
+        value = _normalize_whitespace("".join(frame["parts"]))
+        if not value:
+            return
+
+        values = self.results.setdefault(testid, [])
+        if value not in values:
+            values.append(value)
+
+        for parent in reversed(self._stack):
+            if not parent["testid"]:
+                continue
+            if parent["parts"] and not parent["parts"][-1].endswith((", ", " ", "\n", "\t")):
+                parent["parts"].append(", ")
+            parent["parts"].append(value)
+
+    def handle_data(self, data: str) -> None:
+        if not data.strip():
+            return
+
+        for frame in reversed(self._stack):
+            if not frame["testid"]:
+                continue
+            frame["parts"].append(data)
+            break
+
+
+class _ChildTextExtractor(HTMLParser):
+    def __init__(self, container_testid: str):
+        super().__init__()
+        self._container_testid = container_testid
+        self._container_depth = 0
+        self._child_depth = 0
+        self._child_parts: list[str] = []
+        self.values: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+        if attrs_dict.get("data-testid") == self._container_testid:
+            self._container_depth += 1
+            return
+
+        if self._container_depth == 1:
+            self._child_depth = 1
+            self._child_parts = []
+            return
+
+        if self._child_depth > 0:
+            self._child_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._child_depth > 0:
+            self._child_depth -= 1
+            if self._child_depth == 0:
+                value = _normalize_whitespace("".join(self._child_parts))
+                if value and value not in self.values:
+                    self.values.append(value)
+            return
+
+        if self._container_depth > 0:
+            self._container_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._child_depth > 0:
+            self._child_parts.append(data)
+
+
+class _FlatTextExtractor(HTMLParser):
+    def __init__(self, container_testid: str):
+        super().__init__()
+        self._container_testid = container_testid
+        self._capture_depth = 0
+        self._parts: list[str] = []
+        self.value = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+        if attrs_dict.get("data-testid") == self._container_testid:
+            self._capture_depth = 1
+            return
+
+        if self._capture_depth > 0:
+            self._capture_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._capture_depth == 0:
+            return
+
+        self._capture_depth -= 1
+        if self._capture_depth == 0:
+            self.value = _normalize_whitespace(" ".join(self._parts))
+
+    def handle_data(self, data: str) -> None:
+        if self._capture_depth == 0:
+            return
+
+        value = data.strip()
+        if value:
+            self._parts.append(value)
 
 
 def _contains_upwork_job_payload(flat_data: Any) -> bool:
@@ -77,6 +209,16 @@ def _strip_tags(value: str) -> str:
     return _normalize_whitespace(re.sub(r"<[^>]+>", " ", value))
 
 
+def _dedupe_repeated_phrase(value: str) -> str:
+    normalized = _normalize_whitespace(value)
+    words = normalized.split()
+    if len(words) % 2 == 0:
+        midpoint = len(words) // 2
+        if words[:midpoint] == words[midpoint:]:
+            return " ".join(words[:midpoint])
+    return normalized
+
+
 def _contains_html(content: str) -> bool:
     return bool(re.search(r"<[a-zA-Z][^>]*>", content))
 
@@ -95,6 +237,32 @@ def _render_markdown(html: str) -> str:
     )
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
     return markdown.strip()
+
+
+def _extract_json_ld_blocks(html: str) -> list[Any]:
+    blocks = []
+    pattern = re.compile(
+        r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(html):
+        raw_json = match.group(1).strip()
+        if '"JobPosting"' not in raw_json:
+            continue
+
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            continue
+
+        if isinstance(parsed, list):
+            blocks.extend(item for item in parsed if isinstance(item, dict))
+            continue
+
+        if isinstance(parsed, dict):
+            blocks.append(parsed)
+
+    return blocks
 
 
 def _resolve_relative_links(html: str, source_url: str | None) -> str:
@@ -243,6 +411,27 @@ def _extract_links(html: str, source_url: str | None) -> list["Attachment"]:
     return links
 
 
+def _extract_data_testid_values(html: str) -> dict[str, list[str]]:
+    parser = _DataTestIdParser()
+    parser.feed(html)
+    parser.close()
+    return parser.results
+
+
+def _extract_child_texts_from_testid_container(html: str, container_testid: str) -> list[str]:
+    parser = _ChildTextExtractor(container_testid)
+    parser.feed(html)
+    parser.close()
+    return parser.values
+
+
+def _extract_flat_text_from_testid_container(html: str, container_testid: str) -> str:
+    parser = _FlatTextExtractor(container_testid)
+    parser.feed(html)
+    parser.close()
+    return _dedupe_repeated_phrase(parser.value)
+
+
 def _revive_devalue(data: list[Any]) -> Any:
     cache: dict[int, Any] = {}
 
@@ -297,17 +486,47 @@ class JobPosting:
     title: str
     description_html: str
     attachments: list[Attachment]
+    company: str = ""
+    salary: str = ""
+    experience: str = ""
+    locations: list[str] | None = None
+    technologies: list[str] | None = None
+    company_sector_tags: list[str] | None = None
+    data_testid_values: dict[str, list[str]] | None = None
 
     def to_markdown(self) -> str:
         body = _render_markdown(self.description_html)
         attachments = self._render_attachments()
+        metadata = self._render_metadata()
         if self.title and body:
-            return f"# {self.title}\n\n{body}{attachments}"
+            return f"# {self.title}\n\n{metadata}{body}{attachments}"
         if self.title:
-            return f"# {self.title}{attachments}"
+            return f"# {self.title}{attachments}" if not metadata else f"# {self.title}\n\n{metadata.rstrip()}{attachments}"
+        if self.company and body:
+            return f"{metadata}{body}{attachments}"
+        if metadata:
+            return f"{metadata.rstrip()}{attachments}"
         if body:
             return f"{body}{attachments}"
         return attachments.lstrip("\n") if attachments else ""
+
+    def _render_metadata(self) -> str:
+        lines = []
+        if self.company:
+            lines.append(f"- **Company:** {self.company}")
+        if self.salary:
+            lines.append(f"- **Salary:** {self.salary}")
+        if self.experience:
+            lines.append(f"- **Experience:** {self.experience}")
+        if self.locations:
+            lines.append(f"- **Locations:** {', '.join(self.locations)}")
+        if self.technologies:
+            lines.append(f"- **Technologies:** {', '.join(self.technologies)}")
+        if self.company_sector_tags:
+            lines.append(f"- **Sectors:** {', '.join(self.company_sector_tags)}")
+        if not lines:
+            return ""
+        return "\n".join(lines) + "\n\n"
 
     def _render_attachments(self) -> str:
         if not self.attachments:
@@ -466,65 +685,173 @@ class GenericHtmlExtractor:
 
 
 class WelcomeToTheJungleExtractor:
+    _FIELD_EXTRACTORS = {
+        "technologies": ("job-technology-used", "container_children"),
+        "company_sector_tags": ("company-sector-tags", "container_children"),
+        "salary": ("salary-section", "bucket_first"),
+        "experience": ("experience-section", "experience_levels"),
+        "locations": ("job-locations", "container_children"),
+    }
+
     def __init__(self, html: str, source_url: str | None = None):
         self._html = html
         self._source_url = source_url
+        self._job_posting: dict[str, Any] | None = None
 
     @classmethod
-    def from_string(cls, html: str, source_url: str | None = None) -> "WelcomeToTheJungleExtractor":
+    def from_string(
+        cls,
+        html: str,
+        source_url: str | None = None,
+    ) -> "WelcomeToTheJungleExtractor":
         return cls(html, source_url=source_url)
 
     @classmethod
     def matches(cls, html: str, source_url: str | None = None) -> bool:
         if not _contains_html(html):
             return False
-        return all(marker in html for marker in _WTTJ_CONTENT_MARKERS)
+
+        has_wttj_marker = cls._is_wttj_source(source_url) or "Welcome to the Jungle" in html
+        if not has_wttj_marker:
+            return False
+
+        return cls._find_job_posting(html) is not None
+
+    @classmethod
+    def _is_wttj_source(cls, source_url: str | None) -> bool:
+        if not source_url:
+            return False
+
+        host = urlparse(source_url).netloc.lower()
+        return any(host == allowed_host or host.endswith(f".{allowed_host}") for allowed_host in _WELCOME_TO_THE_JUNGLE_HOSTS)
+
+    @classmethod
+    def _find_job_posting(cls, html: str) -> dict[str, Any] | None:
+        for block in _extract_json_ld_blocks(html):
+            if block.get("@type") != "JobPosting":
+                continue
+            if not isinstance(block.get("hiringOrganization"), dict):
+                continue
+            return block
+        return None
 
     def extract(self) -> JobPosting:
-        if not self.matches(self._html, source_url=self._source_url):
-            raise ExtractorMismatchError(_WELCOME_TO_THE_JUNGLE_ERROR)
+        if not _contains_html(self._html):
+            raise ValueError(_NOT_HTML_ERROR)
 
-        title = self._extract_title()
-        description_html = self._extract_content_block()
-        description_html = _resolve_relative_links(description_html, self._source_url)
+        job_posting = self._job_posting or self._find_job_posting(self._html)
+        if job_posting is None:
+            raise ValueError(_GENERIC_EXTRACTION_ERROR)
 
-        if not title or not _strip_tags(description_html):
-            raise ValueError(_WELCOME_TO_THE_JUNGLE_ERROR)
+        self._job_posting = job_posting
+        company = self._extract_company(job_posting)
+        description_html = self._build_description_html(job_posting)
+        attachments = _extract_links(description_html, self._source_url)
+        data_testid_values = _extract_data_testid_values(self._html)
+        normalized_fields = self._extract_structured_fields(data_testid_values)
 
         return JobPosting(
-            title=title,
+            title=_normalize_whitespace(str(job_posting.get("title", ""))),
+            company=company,
+            salary=self._coerce_string_field(normalized_fields.get("salary")),
+            experience=self._coerce_string_field(normalized_fields.get("experience")),
+            locations=self._coerce_list_field(normalized_fields.get("locations")),
             description_html=description_html,
-            attachments=[],
+            attachments=attachments,
+            technologies=self._coerce_list_field(normalized_fields.get("technologies")),
+            company_sector_tags=self._coerce_list_field(normalized_fields.get("company_sector_tags")),
+            data_testid_values=data_testid_values,
         )
 
-    def _extract_title(self) -> str:
-        h1_texts = _extract_heading_texts(self._html, "h1")
-        for heading in h1_texts:
-            if heading.lower().startswith("welcome back,"):
+    def _extract_company(self, job_posting: dict[str, Any]) -> str:
+        organization = job_posting.get("hiringOrganization")
+        if not isinstance(organization, dict):
+            return ""
+        return _normalize_whitespace(str(organization.get("name", "")))
+
+    def _build_description_html(self, job_posting: dict[str, Any]) -> str:
+        sections = []
+        description = self._clean_html_field(job_posting.get("description"))
+        responsibilities = self._clean_html_field(job_posting.get("responsibilities"))
+        skills = self._clean_html_field(job_posting.get("skills"))
+        benefits = self._clean_html_field(job_posting.get("jobBenefits"))
+
+        if description:
+            sections.append(description)
+        if responsibilities and responsibilities not in sections:
+            sections.append(f"<h1>Responsibilities</h1>\n{responsibilities}")
+        if skills and skills not in sections:
+            sections.append(f"<h1>Skills</h1>\n{skills}")
+        if benefits and benefits not in sections:
+            sections.append(f"<h1>Benefits</h1>\n{benefits}")
+
+        return "\n\n".join(section for section in sections if section).strip()
+
+    def _clean_html_field(self, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+
+        cleaned = re.sub(r"</li>\s*,\s*<li", "</li><li", cleaned)
+        return cleaned.strip()
+
+    def _extract_structured_fields(
+        self,
+        data_testid_values: dict[str, list[str]],
+    ) -> dict[str, list[str] | str]:
+        structured_fields: dict[str, list[str] | str] = {}
+        for field_name, (testid, strategy) in self._FIELD_EXTRACTORS.items():
+            if strategy == "container_children":
+                values = _extract_child_texts_from_testid_container(self._html, testid)
+                if values:
+                    structured_fields[field_name] = values
                 continue
-            return heading
+
+            if strategy == "bucket_first":
+                value = _extract_flat_text_from_testid_container(self._html, testid)
+                if value:
+                    structured_fields[field_name] = value
+                    continue
+
+                values = data_testid_values.get(testid, [])
+                if values:
+                    structured_fields[field_name] = values[0]
+                continue
+
+            if strategy == "experience_levels":
+                value = _extract_flat_text_from_testid_container(self._html, testid)
+                if value:
+                    levels = self._extract_experience_levels(value)
+                    if levels:
+                        structured_fields[field_name] = ", ".join(levels)
+                        continue
+                    structured_fields[field_name] = value
+
+        return structured_fields
+
+    def _coerce_list_field(self, value: list[str] | str | None) -> list[str]:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value:
+            return [value]
+        return []
+
+    def _coerce_string_field(self, value: list[str] | str | None) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list) and value:
+            return value[0]
         return ""
 
-    def _extract_content_block(self) -> str:
-        h1_pattern = re.compile(r"<h1\b[^>]*>.*?</h1>", re.IGNORECASE | re.DOTALL)
-        start_index = None
-        for match in h1_pattern.finditer(self._html):
-            heading_text = _strip_tags(match.group(0))
-            if heading_text and not heading_text.lower().startswith("welcome back,"):
-                start_index = match.start()
-                break
-
-        if start_index is None:
-            raise ValueError(_WELCOME_TO_THE_JUNGLE_ERROR)
-
-        end_index = len(self._html)
-        for marker in ('data-testid="bottom-nav-bar"', 'data-testid="apply-bottom-bar"'):
-            marker_index = self._html.find(marker, start_index)
-            if marker_index != -1:
-                end_index = min(end_index, marker_index)
-
-        content_html = self._html[start_index:end_index].strip()
-        return _remove_junk_blocks(content_html)
+    def _extract_experience_levels(self, value: str) -> list[str]:
+        levels = []
+        for label, pattern in _WELCOME_TO_THE_JUNGLE_EXPERIENCE_LEVELS:
+            if pattern.search(value):
+                levels.append(label)
+        return levels
 
 
 def select_extractor(html: str, source_url: str | None = None) -> type[Any]:
