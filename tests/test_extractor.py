@@ -6,7 +6,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from posting_extractor import GenericHtmlExtractor, UpworkExtractor, extract_job_posting
+from posting_extractor import (
+    GenericHtmlExtractor,
+    UpworkExtractor,
+    WelcomeToTheJungleExtractor,
+    extract_job_posting,
+    select_extractor,
+)
 from posting_extractor import cli
 
 
@@ -87,6 +93,10 @@ def make_generic_job_page() -> str:
 """
 
 
+def read_example(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
 def test_extracts_title_and_markdown_body():
     html = make_saved_page(
         "<p>Hello <strong>world</strong>.</p><ul><li>One</li><li>Two</li></ul>"
@@ -154,6 +164,67 @@ def test_extract_job_posting_falls_back_to_generic_html():
     assert "Privacy Terms" not in job.to_markdown()
 
 
+def test_select_extractor_returns_upwork_for_upwork_payload():
+    extractor = select_extractor(make_saved_page("<p>Converted</p>"))
+
+    assert extractor is UpworkExtractor
+
+
+def test_select_extractor_returns_generic_for_generic_page():
+    extractor = select_extractor(
+        make_generic_job_page(),
+        source_url="https://example.com/jobs/senior-python-developer",
+    )
+
+    assert extractor is GenericHtmlExtractor
+
+
+def test_select_extractor_returns_welcome_to_the_jungle_for_saved_page():
+    extractor = select_extractor(read_example("docs/examples/welcome-to-the-jungle.html"))
+
+    assert extractor is WelcomeToTheJungleExtractor
+
+
+def test_welcome_to_the_jungle_matches_both_saved_page_variants():
+    standard_html = read_example("docs/examples/welcome-to-the-jungle.html")
+    dashboard_html = read_example("docs/examples/welcome-to-the-jungle-from-dashboard.html")
+
+    assert WelcomeToTheJungleExtractor.matches(standard_html) is True
+    assert WelcomeToTheJungleExtractor.matches(dashboard_html) is True
+
+
+def test_welcome_to_the_jungle_extractor_extracts_standard_saved_page():
+    html = read_example("docs/examples/welcome-to-the-jungle.html")
+
+    job = WelcomeToTheJungleExtractor.from_string(html).extract()
+
+    assert job.title == "Experienced Software Engineer, Automattic"
+    assert "Company benefits" in job.to_markdown()
+    assert "Meet the team" in job.to_markdown()
+    assert "Navigate between jobs by swiping left or right" not in job.to_markdown()
+
+
+def test_welcome_to_the_jungle_extractor_extracts_dashboard_saved_page():
+    html = read_example("docs/examples/welcome-to-the-jungle-from-dashboard.html")
+
+    job = WelcomeToTheJungleExtractor.from_string(html).extract()
+
+    assert job.title == "Experienced Software Engineer, Automattic"
+    assert "Welcome back, Wesley" not in job.to_markdown()
+    assert "Company benefits" in job.to_markdown()
+    assert "Apply now" not in job.to_markdown()
+
+
+def test_upwork_matches_checks_content_signature():
+    assert UpworkExtractor.matches(make_saved_page("<p>Converted</p>")) is True
+    assert UpworkExtractor.matches(make_generic_job_page()) is False
+
+
+def test_generic_matches_checks_content_signature():
+    assert GenericHtmlExtractor.matches(make_generic_job_page()) is True
+    assert GenericHtmlExtractor.matches("<html><body><p>Too short</p></body></html>") is False
+
+
 def test_generic_html_extractor_uses_title_when_h1_is_missing():
     html = """\
 <html>
@@ -185,7 +256,7 @@ def test_cli_writes_markdown_file(capsys, tmp_path: Path):
     assert exit_code == 0
     assert output_file.read_text(encoding="utf-8") == "# Test Job\n\nConverted\n"
     assert output_file.exists()
-    assert captured.out == ""
+    assert captured.out == "Using UpworkExtractor...\n"
     assert captured.err == ""
 
 
@@ -200,7 +271,7 @@ def test_cli_writes_markdown_file_to_explicit_output_path(capsys, tmp_path: Path
     assert exit_code == 0
     assert output_file.exists()
     assert output_file.read_text(encoding="utf-8") == "# Test Job\n\nConverted\n"
-    assert captured.out == ""
+    assert captured.out == "Using UpworkExtractor...\n"
     assert captured.err == ""
     assert not (tmp_path / "posting.md").exists()
 
@@ -239,7 +310,7 @@ def test_cli_writes_markdown_file_for_url(monkeypatch, capsys, tmp_path: Path):
     assert exit_code == 0
     assert output_file.exists()
     assert output_file.read_text(encoding="utf-8") == "# Remote Role\n\nConverted\n"
-    assert captured.out == ""
+    assert captured.out == "Using UpworkExtractor...\n"
     assert captured.err == ""
 
 
@@ -273,7 +344,7 @@ def test_cli_writes_url_markdown_file_to_explicit_output_path(monkeypatch, capsy
     assert exit_code == 0
     assert output_file.exists()
     assert "Senior Python Developer" in output_file.read_text(encoding="utf-8")
-    assert captured.out == ""
+    assert captured.out == "Using GenericHtmlExtractor...\n"
     assert captured.err == ""
     assert not (tmp_path / "senior-python-developer.md").exists()
 
@@ -337,7 +408,7 @@ def test_cli_writes_markdown_file_for_generic_url(monkeypatch, capsys, tmp_path:
     assert exit_code == 0
     assert output_file.exists()
     assert "Senior Python Developer" in output_file.read_text(encoding="utf-8")
-    assert captured.out == ""
+    assert captured.out == "Using GenericHtmlExtractor...\n"
     assert captured.err == ""
 
 

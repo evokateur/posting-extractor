@@ -18,6 +18,7 @@ _DEVALUE_SPECIAL_TAGS = frozenset({
 _WRONG_FILE_ERROR = """\
 Could not find the expected Upwork job data in this HTML file.
 """
+_WELCOME_TO_THE_JUNGLE_ERROR = "Could not find the expected Welcome to the Jungle job content in this HTML file."
 _GENERIC_EXTRACTION_ERROR = "Could not find recognizable job posting content in this HTML file."
 _NOT_HTML_ERROR = "Input file does not contain HTML."
 _UPWORK_BASE_URL = "https://www.upwork.com"
@@ -46,10 +47,26 @@ _JUNK_CLASS_PATTERNS = (
     "modal",
 )
 _ATTACHMENT_PATTERNS = (".pdf", ".doc", ".docx", ".rtf", "attachment", "download")
+_WTTJ_CONTENT_MARKERS = (
+    'window.__APOLLO_STATE__=__b64dec("',
+    'data-testid="company-benefit-bullet"',
+    'Welcome to the Jungle',
+)
 
 
 class ExtractorMismatchError(ValueError):
     pass
+
+
+def _contains_upwork_job_payload(flat_data: Any) -> bool:
+    if not isinstance(flat_data, list):
+        return False
+
+    try:
+        root = _revive_devalue(flat_data)
+        return bool(root["vuex"]["jobDetails"]["job"]["uid"])
+    except (KeyError, TypeError, IndexError):
+        return False
 
 
 def _normalize_whitespace(value: str) -> str:
@@ -141,6 +158,15 @@ def _extract_title_from_html(html: str) -> str:
         return _strip_tags(title_matches[0])
 
     return ""
+
+
+def _extract_heading_texts(html: str, tag_name: str) -> list[str]:
+    headings = []
+    for candidate in _extract_tag_content(html, tag_name):
+        text = _strip_tags(candidate)
+        if text:
+            headings.append(text)
+    return headings
 
 
 def _score_candidate_block(block_html: str) -> int:
@@ -314,6 +340,22 @@ class UpworkExtractor:
     def from_string(cls, html: str) -> "UpworkExtractor":
         return cls(html)
 
+    @classmethod
+    def matches(cls, html: str, source_url: str | None = None) -> bool:
+        if not _contains_html(html):
+            return False
+
+        for raw_json in cls._PAYLOAD_RE.findall(html):
+            try:
+                flat = json.loads(raw_json)
+            except json.JSONDecodeError:
+                continue
+
+            if _contains_upwork_job_payload(flat):
+                return True
+
+        return False
+
     def _get_state(self) -> dict[str, Any]:
         if self._state is not None:
             return self._state
@@ -327,16 +369,10 @@ class UpworkExtractor:
             except json.JSONDecodeError:
                 continue
 
-            if not isinstance(flat, list):
+            if not _contains_upwork_job_payload(flat):
                 continue
 
-            try:
-                root = _revive_devalue(flat)
-                root["vuex"]["jobDetails"]["job"]["uid"]
-            except (KeyError, TypeError, IndexError):
-                continue
-
-            self._state = root
+            self._state = _revive_devalue(flat)
             return self._state
 
         raise ExtractorMismatchError(_WRONG_FILE_ERROR)
@@ -399,6 +435,16 @@ class GenericHtmlExtractor:
     def from_string(cls, html: str, source_url: str | None = None) -> "GenericHtmlExtractor":
         return cls(html, source_url=source_url)
 
+    @classmethod
+    def matches(cls, html: str, source_url: str | None = None) -> bool:
+        if not _contains_html(html):
+            return False
+
+        description_html = _extract_description_block(html)
+        body_text = _strip_tags(description_html)
+        title = _extract_title_from_html(html)
+        return len(body_text) >= 80 or bool(title)
+
     def extract(self) -> JobPosting:
         if not _contains_html(self._html):
             raise ValueError(_NOT_HTML_ERROR)
@@ -419,11 +465,82 @@ class GenericHtmlExtractor:
         )
 
 
-def extract_job_posting(html: str, source_url: str | None = None) -> JobPosting:
+class WelcomeToTheJungleExtractor:
+    def __init__(self, html: str, source_url: str | None = None):
+        self._html = html
+        self._source_url = source_url
+
+    @classmethod
+    def from_string(cls, html: str, source_url: str | None = None) -> "WelcomeToTheJungleExtractor":
+        return cls(html, source_url=source_url)
+
+    @classmethod
+    def matches(cls, html: str, source_url: str | None = None) -> bool:
+        if not _contains_html(html):
+            return False
+        return all(marker in html for marker in _WTTJ_CONTENT_MARKERS)
+
+    def extract(self) -> JobPosting:
+        if not self.matches(self._html, source_url=self._source_url):
+            raise ExtractorMismatchError(_WELCOME_TO_THE_JUNGLE_ERROR)
+
+        title = self._extract_title()
+        description_html = self._extract_content_block()
+        description_html = _resolve_relative_links(description_html, self._source_url)
+
+        if not title or not _strip_tags(description_html):
+            raise ValueError(_WELCOME_TO_THE_JUNGLE_ERROR)
+
+        return JobPosting(
+            title=title,
+            description_html=description_html,
+            attachments=[],
+        )
+
+    def _extract_title(self) -> str:
+        h1_texts = _extract_heading_texts(self._html, "h1")
+        for heading in h1_texts:
+            if heading.lower().startswith("welcome back,"):
+                continue
+            return heading
+        return ""
+
+    def _extract_content_block(self) -> str:
+        h1_pattern = re.compile(r"<h1\b[^>]*>.*?</h1>", re.IGNORECASE | re.DOTALL)
+        start_index = None
+        for match in h1_pattern.finditer(self._html):
+            heading_text = _strip_tags(match.group(0))
+            if heading_text and not heading_text.lower().startswith("welcome back,"):
+                start_index = match.start()
+                break
+
+        if start_index is None:
+            raise ValueError(_WELCOME_TO_THE_JUNGLE_ERROR)
+
+        end_index = len(self._html)
+        for marker in ('data-testid="bottom-nav-bar"', 'data-testid="apply-bottom-bar"'):
+            marker_index = self._html.find(marker, start_index)
+            if marker_index != -1:
+                end_index = min(end_index, marker_index)
+
+        content_html = self._html[start_index:end_index].strip()
+        return _remove_junk_blocks(content_html)
+
+
+def select_extractor(html: str, source_url: str | None = None) -> type[Any]:
     if not _contains_html(html):
         raise ValueError(_NOT_HTML_ERROR)
 
-    try:
-        return UpworkExtractor.from_string(html).extract_or_raise_mismatch()
-    except ExtractorMismatchError:
-        return GenericHtmlExtractor.from_string(html, source_url=source_url).extract()
+    extractors = (UpworkExtractor, WelcomeToTheJungleExtractor, GenericHtmlExtractor)
+    for extractor in extractors:
+        if extractor.matches(html, source_url=source_url):
+            return extractor
+
+    raise ValueError(_GENERIC_EXTRACTION_ERROR)
+
+
+def extract_job_posting(html: str, source_url: str | None = None) -> JobPosting:
+    extractor = select_extractor(html, source_url=source_url)
+    if extractor is UpworkExtractor:
+        return extractor.from_string(html).extract_or_raise_mismatch()
+    return extractor.from_string(html, source_url=source_url).extract()

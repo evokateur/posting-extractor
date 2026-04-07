@@ -1,8 +1,17 @@
-from .extractor import ExtractedJob, GenericHtmlExtractor, UpworkExtractor, extract_job_posting
+from .extractor import (
+    ExtractedJob,
+    GenericHtmlExtractor,
+    UpworkExtractor,
+    WelcomeToTheJungleExtractor,
+    extract_job_posting,
+    select_extractor,
+)
 
 __all__ = [
     "extract_job_posting",
+    "select_extractor",
     "UpworkExtractor",
+    "WelcomeToTheJungleExtractor",
     "GenericHtmlExtractor",
     "ExtractedJob",
 ]
