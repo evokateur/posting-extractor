@@ -30,6 +30,14 @@ _WELCOME_TO_THE_JUNGLE_EXPERIENCE_LEVELS = (
     ("Junior", re.compile(r"\bJunior\b", re.IGNORECASE)),
     ("Mid", re.compile(r"\bMid\b", re.IGNORECASE)),
     ("Senior", re.compile(r"\bSenior\b", re.IGNORECASE)),
+    ("Expert", re.compile(r"\bExpert\b", re.IGNORECASE)),
+)
+_WELCOME_TO_THE_JUNGLE_TESTIDS = (
+    "job-technology-used",
+    "company-sector-tags",
+    "experience-section",
+    "job-locations",
+    "salary-section",
 )
 _CONTENT_KEYWORDS = (
     "job description",
@@ -556,7 +564,7 @@ class UpworkExtractor:
         return cls(Path(path).read_text(encoding="utf-8"))
 
     @classmethod
-    def from_string(cls, html: str) -> "UpworkExtractor":
+    def from_string(cls, html: str, source_url: str | None = None) -> "UpworkExtractor":
         return cls(html)
 
     @classmethod
@@ -711,11 +719,16 @@ class WelcomeToTheJungleExtractor:
         if not _contains_html(html):
             return False
 
-        has_wttj_marker = cls._is_wttj_source(source_url) or "Welcome to the Jungle" in html
-        if not has_wttj_marker:
+        has_job_posting = cls._find_job_posting(html) is not None
+        if not has_job_posting:
             return False
 
-        return cls._find_job_posting(html) is not None
+        has_wttj_marker = cls._is_wttj_source(source_url) or "Welcome to the Jungle" in html
+        if has_wttj_marker:
+            return True
+
+        data_testid_values = _extract_data_testid_values(html)
+        return any(testid in data_testid_values for testid in _WELCOME_TO_THE_JUNGLE_TESTIDS)
 
     @classmethod
     def _is_wttj_source(cls, source_url: str | None) -> bool:
@@ -868,6 +881,4 @@ def select_extractor(html: str, source_url: str | None = None) -> type[Any]:
 
 def extract_job_posting(html: str, source_url: str | None = None) -> JobPosting:
     extractor = select_extractor(html, source_url=source_url)
-    if extractor is UpworkExtractor:
-        return extractor.from_string(html).extract_or_raise_mismatch()
     return extractor.from_string(html, source_url=source_url).extract()

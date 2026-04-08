@@ -158,6 +158,39 @@ def make_welcome_to_the_jungle_job_page() -> str:
 """
 
 
+def make_saved_wttj_job_page_without_branding_text() -> str:
+    return """\
+<html>
+  <head>
+    <title>Software Engineer</title>
+    <script type="application/ld+json">{"@context":"https://schema.org/","@type":"JobPosting","title":"Software Engineer","hiringOrganization":{"@type":"Organization","name":"Example Co"}}</script>
+  </head>
+  <body>
+    <div data-testid="salary-section">$120k + Equity</div>
+    <div data-testid="experience-section">Junior and Mid level</div>
+    <div data-testid="job-locations"><div>Remote from US</div></div>
+    <div data-testid="job-technology-used"><div>Python</div></div>
+    <div data-testid="company-sector-tags"><span>SaaS</span></div>
+  </body>
+</html>
+"""
+
+
+def make_wttj_job_page_with_senior_and_expert_levels() -> str:
+    return """\
+<html>
+  <head>
+    <script type="application/ld+json">{"@context":"https://schema.org/","@type":"JobPosting","title":"Software Engineer","hiringOrganization":{"@type":"Organization","name":"Example Co"}}</script>
+  </head>
+  <body>
+    <div data-testid="experience-section">Senior and Expert level</div>
+    <div data-testid="job-technology-used"><div>Python</div></div>
+    <div data-testid="company-sector-tags"><span>SaaS</span></div>
+  </body>
+</html>
+"""
+
+
 def test_extracts_title_and_markdown_body():
     html = make_saved_page(
         "<p>Hello <strong>world</strong>.</p><ul><li>One</li><li>Two</li></ul>"
@@ -249,6 +282,12 @@ def test_select_extractor_returns_wttj_for_wttj_payload():
     assert extractor is WelcomeToTheJungleExtractor
 
 
+def test_select_extractor_returns_wttj_for_saved_wttj_html_without_branding_text():
+    extractor = select_extractor(make_saved_wttj_job_page_without_branding_text())
+
+    assert extractor is WelcomeToTheJungleExtractor
+
+
 def test_upwork_matches_checks_content_signature():
     assert UpworkExtractor.matches(make_saved_page("<p>Converted</p>")) is True
     assert UpworkExtractor.matches(make_generic_job_page()) is False
@@ -263,6 +302,9 @@ def test_wttj_matches_checks_content_signature():
     assert WelcomeToTheJungleExtractor.matches(
         make_welcome_to_the_jungle_job_page(),
         source_url="https://app.welcometothejungle.com/jobs/example",
+    ) is True
+    assert WelcomeToTheJungleExtractor.matches(
+        make_saved_wttj_job_page_without_branding_text()
     ) is True
     assert WelcomeToTheJungleExtractor.matches(make_generic_job_page()) is False
 
@@ -304,6 +346,13 @@ def test_extract_job_posting_prefers_wttj_extractor_when_available():
     assert job.salary == "$120k + Equity"
     assert "# Skills" in job.to_markdown()
     assert job.technologies == ["Python", "GraphQL", "AWS"]
+
+
+def test_wttj_experience_includes_expert_level():
+    job = extract_job_posting(make_wttj_job_page_with_senior_and_expert_levels())
+
+    assert job.experience == "Senior, Expert"
+    assert "- **Experience:** Senior, Expert" in job.to_markdown()
 
 
 def test_generic_html_extractor_uses_title_when_h1_is_missing():
