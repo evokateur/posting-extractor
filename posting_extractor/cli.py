@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-from .extractor import UpworkExtractor, select_extractor
+from .extractor import select_extractor
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -52,10 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             html = _fetch_url_html(args.input)
             extractor = select_extractor(html, source_url=args.input)
             print(f"Using {extractor.__name__}...")
-            if extractor is UpworkExtractor:
-                job = extractor.from_string(html).extract_or_raise_mismatch()
-            else:
-                job = extractor.from_string(html, source_url=args.input).extract()
+            job = extractor.from_string(html, source_url=args.input).extract()
         else:
             input_file = Path(args.input)
             if not input_file.exists():
@@ -64,10 +61,7 @@ def main(argv: list[str] | None = None) -> int:
             html = input_file.read_text(encoding="utf-8")
             extractor = select_extractor(html)
             print(f"Using {extractor.__name__}...")
-            if extractor is UpworkExtractor:
-                job = extractor.from_string(html).extract_or_raise_mismatch()
-            else:
-                job = extractor.from_string(html).extract()
+            job = extractor.from_string(html).extract()
     except (OSError, ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
